@@ -130,7 +130,7 @@ func initScreen() {
 	// Clear screen and place cursor at top-left once.
 	fmt.Print("\033[2J\033[H")
 	fmt.Printf("Live %v ms Candles\n", candleInterval.Milliseconds())
-	fmt.Println("Symbol   Price      Delta      VolTrend    Qty")
+	fmt.Println("Symbol   Price      Delta      VolDelta    Qty")
 	for range symbols {
 		fmt.Println()
 	}
@@ -169,27 +169,29 @@ func renderDashboard() {
 			deltaColor = "\033[31m"
 		}
 
-		volTrend := "first"
+		var volDeltaText string
+		volDelta := currentCandleVolume - h.lastCandleVolume
 		volColor := "\033[36m"
-		if h.hasLastCandle {
-			volTrend = "same"
-			volColor = "\033[33m"
-			if currentCandleVolume > h.lastCandleVolume {
-				volTrend = "higher"
+		if !h.hasLastCandle {
+			volDeltaText = fmt.Sprintf("%+8d", currentCandleVolume)
+		} else {
+			volDeltaText = fmt.Sprintf("%+8d", volDelta)
+			if volDelta > 0 {
 				volColor = "\033[32m"
-			} else if currentCandleVolume < h.lastCandleVolume {
-				volTrend = "lower"
+			} else if volDelta < 0 {
 				volColor = "\033[31m"
+			} else {
+				volColor = "\033[33m"
 			}
 		}
 
 		qtyText := fmt.Sprintf("%-8d", h.quantity)
 		line := fmt.Sprintf(
-			"%-7s  %s  %s  %-7s  %s",
+			"%-7s  %s  %s  %s  %s",
 			symbol,
 			colorize(priceText, "\033[37m"),
 			colorize(deltaText, deltaColor),
-			colorize(volTrend, volColor),
+			colorize(volDeltaText, volColor),
 			colorize(qtyText, "\033[37m"),
 		)
 
