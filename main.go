@@ -2,22 +2,24 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
-	"sort"
-	"sync"
 	"time"
 
 	finnhub "github.com/Finnhub-Stock-API/finnhub-go/v2"
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
+	_ "github.com/ncruces/go-sqlite3/driver"
 )
 
-var candleInterval = 500 * time.Millisecond
-var holdingsMu sync.Mutex
+var candleInterval = 500
+var candleIntervalMs = time.Duration(candleInterval) * time.Millisecond
 var symbols []string
-var cash float32 = 100000
+var holdings *Holdings
 
 type wsMessage struct {
 	Type string    `json:"type"`
@@ -30,19 +32,7 @@ type wsTrade struct {
 	Volume float64 `json:"v"`
 }
 
-// holdings maps each symbol to its holding data.
-var holdings = map[string]Holding{
-	"AAPL":  {quantity: 100},
-	"MSFT":  {quantity: 100},
-	"GOOG":  {quantity: 100},
-	"AMZN":  {quantity: 100},
-	"NVDA":  {quantity: 100},
-	"META":  {quantity: 100},
-	"TSLA":  {quantity: 100},
-	"AVGO":  {quantity: 100},
-	"BRK.B": {quantity: 100},
-	"JPM":   {quantity: 100},
-}
+var db *sql.DB
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -53,7 +43,39 @@ func main() {
 		panic("FINNHUB_TOKEN is not set")
 	}
 
-	initSymbols()
+	var err error
+
+	db, err = sql.Open("sqlite3", "demo.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	createTableSQL := `CREATE TABLE IF NOT EXISTS candles (
+		symbol TEXT NOT NULL,
+		timestamp BIGINT,
+		volume INT NOT NULL,
+		delta REAL NOT NULL,
+		interval INT NOT NULL
+	);`
+	_, err = db.Exec(createTableSQL)
+	if err != nil {
+		log.Fatal("Error creating table:", err)
+	}
+
+	holdings = NewHoldings(map[string]Holding{
+		"AAPL":  {quantity: 100},
+		"MSFT":  {quantity: 100},
+		"GOOG":  {quantity: 100},
+		"AMZN":  {quantity: 100},
+		"NVDA":  {quantity: 100},
+		"META":  {quantity: 100},
+		"TSLA":  {quantity: 100},
+		"AVGO":  {quantity: 100},
+		"BRK.B": {quantity: 100},
+		"JPM":   {quantity: 100},
+	}, 100000)
+	symbols = holdings.Symbols()
 	fetchInitialPrices(token)
 	initScreen()
 
@@ -63,14 +85,14 @@ func main() {
 	}
 	defer w.Close()
 
-	for symbol := range holdings {
+	for _, symbol := range symbols {
 		msg, _ := json.Marshal(map[string]any{"type": "subscribe", "symbol": symbol})
 		w.WriteMessage(websocket.TextMessage, msg)
 	}
 
 	go func() {
 		for {
-			time.Sleep(candleInterval)
+			time.Sleep(candleIntervalMs)
 			candle()
 		}
 	}()
@@ -86,18 +108,17 @@ func main() {
 			continue
 		}
 
-		holdingsMu.Lock()
+		holdings.Lock()
 		for _, trade := range msg.Data {
-			currHolding, ok := holdings[trade.Symbol]
+			currHolding, ok := holdings.Get(trade.Symbol)
 			if !ok {
 				continue
 			}
-
 			currHolding.price = trade.Price
 			currHolding.volume += int(trade.Volume)
-			holdings[trade.Symbol] = currHolding
+			holdings.Set(trade.Symbol, currHolding)
 		}
-		holdingsMu.Unlock()
+		holdings.Unlock()
 	}
 }
 
@@ -111,25 +132,17 @@ func fetchInitialPrices(token string) {
 		if err != nil || res.C == nil {
 			continue
 		}
-		h := holdings[symbol]
+		h, _ := holdings.Get(symbol)
 		h.price = *res.C
 		h.lastPrice = *res.C
-		holdings[symbol] = h
+		holdings.Set(symbol, h)
 	}
-}
-
-func initSymbols() {
-	symbols = make([]string, 0, len(holdings))
-	for symbol := range holdings {
-		symbols = append(symbols, symbol)
-	}
-	sort.Strings(symbols)
 }
 
 func initScreen() {
 	// Clear screen and place cursor at top-left once.
 	fmt.Print("\033[2J\033[H")
-	fmt.Printf("Live %v ms Candles\n", candleInterval.Milliseconds())
+	fmt.Printf("Live %v ms Candles\n", candleIntervalMs.Milliseconds())
 	fmt.Println("Symbol   Price      Delta      VolDelta    Qty")
 	for range symbols {
 		fmt.Println()
@@ -143,11 +156,7 @@ func colorize(text, color string) string {
 }
 
 func portfolioValue() float32 {
-	var total float32 = cash
-	for _, h := range holdings {
-		total += float32(h.quantity) * h.price
-	}
-	return total
+	return holdings.PortfolioValue()
 }
 
 func renderDashboard() {
@@ -155,7 +164,7 @@ func renderDashboard() {
 	fmt.Print("\033[3;1H")
 
 	for _, symbol := range symbols {
-		h := holdings[symbol]
+		h, _ := holdings.Get(symbol)
 		delta := h.price - h.lastPrice
 		currentCandleVolume := h.volume - h.lastVolume
 
@@ -198,52 +207,112 @@ func renderDashboard() {
 		fmt.Printf("\033[2K%s\n", line)
 	}
 
-	fmt.Printf("\033[2KCash:      $%12.2f\n", cash)
+	fmt.Printf("\033[2KCash:      $%12.2f\n", holdings.Cash)
 	fmt.Printf("\033[2KPortfolio: $%12.2f\n", portfolioValue())
 }
 
 func candle() {
-	holdingsMu.Lock()
-	defer holdingsMu.Unlock()
+	holdings.Lock()
+	defer holdings.Unlock()
 
 	renderDashboard()
 
 	for _, symbol := range symbols {
-		h := holdings[symbol]
+		h, _ := holdings.Get(symbol)
 
 		currentCandleVolume := h.volume - h.lastVolume
 		delta := h.price - h.lastPrice
 
-		if h.hasLastCandle {
-			if delta > 0 && currentCandleVolume > h.lastCandleVolume {
-				buy(symbol, 1)
-				h = holdings[symbol]
-			} else if delta < 0 && currentCandleVolume < h.lastCandleVolume {
-				sell(symbol, 1)
-				h = holdings[symbol]
+		avgVol, errV := getAverageCandleVolume(symbol)
+		avgDelta, errD := getAverageCandleDelta(symbol)
+		if errV == nil && errD == nil {
+			if delta > avgDelta && float32(currentCandleVolume) > avgVol {
+				holdings.Buy(symbol, 1)
+				h, _ = holdings.Get(symbol)
+			} else if delta < avgDelta && float32(currentCandleVolume) > avgVol {
+				holdings.Sell(symbol, 1)
+				h, _ = holdings.Get(symbol)
 			}
 		}
+
+		insertCandle(symbol, time.Now().Unix(), currentCandleVolume, delta, candleInterval)
 
 		h.lastPrice = h.price
 		h.lastCandleVolume = currentCandleVolume
 		h.hasLastCandle = true
 		h.lastVolume = h.volume
-		holdings[symbol] = h
+		holdings.Set(symbol, h)
 	}
 }
 
-func buy(symbol string, amount int) {
-	h := holdings[symbol]
-	buyPrice := float32(amount) * h.price
-	h.quantity += amount
-	holdings[symbol] = h
-	cash -= buyPrice + 1 // +1 commission
+func insertCandle(symbol string, timestamp int64, volume int, price float32, interval int) {
+	insertSQL := `INSERT INTO candles (symbol, timestamp, volume, delta, interval) VALUES (?,?,?,?,?);`
+	_, err := db.Exec(insertSQL, symbol, timestamp, volume, price, interval)
+	if err != nil {
+		log.Fatal("Error inserting data:", err)
+	}
 }
 
-func sell(symbol string, amount int) {
-	h := holdings[symbol]
-	sellPrice := float32(amount) * h.price
-	h.quantity -= amount
-	holdings[symbol] = h
-	cash += sellPrice - 1 // -1 commission
+func getAverageCandleVolume(symbol string) (float32, error) {
+	rows, err := db.Query("SELECT volume FROM candles WHERE symbol = ?", symbol)
+	if err != nil {
+		log.Fatal("Error querying volume:", err)
+	}
+	defer rows.Close()
+
+	var sum int
+	var amount int
+
+	for rows.Next() {
+		var volume int
+		err := rows.Scan(&volume)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		sum += volume
+		amount++
+	}
+
+	if amount == 0 {
+		return 0, errors.New("No volume entries to calculate average from")
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+
+	return float32(sum) / float32(amount), nil
+}
+
+func getAverageCandleDelta(symbol string) (float32, error) {
+	rows, err := db.Query("SELECT delta FROM candles WHERE symbol = ?", symbol)
+	if err != nil {
+		log.Fatal("Error querying delta:", err)
+	}
+	defer rows.Close()
+
+	var sum float32
+	var amount int
+
+	for rows.Next() {
+		var delta float32
+		err := rows.Scan(&delta)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		sum += delta
+		amount++
+	}
+
+	if amount == 0 {
+		return 0, errors.New("No delta entries to calculate average from")
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+
+	return sum / float32(amount), nil
 }
