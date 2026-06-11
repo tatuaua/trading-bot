@@ -19,7 +19,7 @@ import (
 var candleInterval = 500
 var candleIntervalMs = time.Duration(candleInterval) * time.Millisecond
 var symbols []string
-var holdings *Holdings
+var positions *Positions
 var initialPortfolioValue float32
 
 type wsMessage struct {
@@ -64,7 +64,7 @@ func main() {
 		log.Fatal("Error creating table:", err)
 	}
 
-	holdings = NewHoldings(map[string]Holding{
+	positions = NewPositions(map[string]Position{
 		"AAPL":  {quantity: 100},
 		"MSFT":  {quantity: 100},
 		"GOOG":  {quantity: 100},
@@ -76,7 +76,7 @@ func main() {
 		"BRK.B": {quantity: 100},
 		"JPM":   {quantity: 100},
 	}, 100000)
-	symbols = holdings.Symbols()
+	symbols = positions.Symbols()
 	fetchInitialPrices(token)
 	initialPortfolioValue = portfolioValue()
 	initScreen()
@@ -110,17 +110,17 @@ func main() {
 			continue
 		}
 
-		holdings.Lock()
+		positions.Lock()
 		for _, trade := range msg.Data {
-			currHolding, ok := holdings.Get(trade.Symbol)
+			currPosition, ok := positions.Get(trade.Symbol)
 			if !ok {
 				continue
 			}
-			currHolding.price = trade.Price
-			currHolding.volume += int(trade.Volume)
-			holdings.Set(trade.Symbol, currHolding)
+			currPosition.price = trade.Price
+			currPosition.volume += int(trade.Volume)
+			positions.Set(trade.Symbol, currPosition)
 		}
-		holdings.Unlock()
+		positions.Unlock()
 	}
 }
 
@@ -134,10 +134,10 @@ func fetchInitialPrices(token string) {
 		if err != nil || res.C == nil {
 			continue
 		}
-		h, _ := holdings.Get(symbol)
+		h, _ := positions.Get(symbol)
 		h.price = *res.C
 		h.lastPrice = *res.C
-		holdings.Set(symbol, h)
+		positions.Set(symbol, h)
 	}
 }
 
@@ -158,7 +158,7 @@ func colorize(text, color string) string {
 }
 
 func portfolioValue() float32 {
-	return holdings.PortfolioValue()
+	return positions.PortfolioValue()
 }
 
 func renderDashboard() {
@@ -166,7 +166,7 @@ func renderDashboard() {
 	fmt.Print("\033[3;1H")
 
 	for _, symbol := range symbols {
-		h, _ := holdings.Get(symbol)
+		h, _ := positions.Get(symbol)
 		delta := h.price - h.lastPrice
 		currentCandleVolume := h.volume - h.lastVolume
 
@@ -211,18 +211,18 @@ func renderDashboard() {
 
 	current := portfolioValue()
 	profit := current - initialPortfolioValue
-	fmt.Printf("\033[2KCash:      $%12.2f\n", holdings.Cash)
+	fmt.Printf("\033[2KCash:      $%12.2f\n", positions.Cash)
 	fmt.Printf("\033[2KPortfolio: $%12.2f  Profit: %+.2f\n", current, profit)
 }
 
 func candle() {
-	holdings.Lock()
-	defer holdings.Unlock()
+	positions.Lock()
+	defer positions.Unlock()
 
 	renderDashboard()
 
 	for _, symbol := range symbols {
-		h, _ := holdings.Get(symbol)
+		h, _ := positions.Get(symbol)
 
 		currentCandleVolume := h.volume - h.lastVolume
 		delta := h.price - h.lastPrice
@@ -231,11 +231,11 @@ func candle() {
 		avgDelta, errD := getAverageCandleDelta(symbol)
 		if errV == nil && errD == nil {
 			if delta > avgDelta && float32(currentCandleVolume) > avgVol {
-				holdings.Buy(symbol, holdings.Cash*0.01)
-				h, _ = holdings.Get(symbol)
+				positions.Buy(symbol, positions.Cash*0.01)
+				h, _ = positions.Get(symbol)
 			} else if delta < avgDelta && float32(currentCandleVolume) > avgVol {
-				holdings.Sell(symbol, holdings.Cash*0.01)
-				h, _ = holdings.Get(symbol)
+				positions.Sell(symbol, positions.Cash*0.01)
+				h, _ = positions.Get(symbol)
 			}
 		}
 
@@ -245,7 +245,7 @@ func candle() {
 		h.lastCandleVolume = currentCandleVolume
 		h.hasLastCandle = true
 		h.lastVolume = h.volume
-		holdings.Set(symbol, h)
+		positions.Set(symbol, h)
 	}
 }
 

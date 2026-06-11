@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-type Holding struct {
+type Position struct {
 	price            float32
 	lastPrice        float32
 	volume           int
@@ -15,32 +15,32 @@ type Holding struct {
 	quantity         float32
 }
 
-// Holdings encapsulates the holdings map, its mutex, and the cash balance.
+// Positions encapsulates the positions map, its mutex, and the cash balance.
 // All map access goes through its methods; callers acquire the lock for bulk operations.
-type Holdings struct {
+type Positions struct {
 	mu   sync.Mutex
-	data map[string]Holding
+	data map[string]Position
 	Cash float32
 }
 
-func NewHoldings(data map[string]Holding, cash float32) *Holdings {
-	return &Holdings{data: data, Cash: cash}
+func NewPositions(data map[string]Position, cash float32) *Positions {
+	return &Positions{data: data, Cash: cash}
 }
 
-func (hs *Holdings) Lock()   { hs.mu.Lock() }
-func (hs *Holdings) Unlock() { hs.mu.Unlock() }
+func (hs *Positions) Lock()   { hs.mu.Lock() }
+func (hs *Positions) Unlock() { hs.mu.Unlock() }
 
-func (hs *Holdings) Get(symbol string) (Holding, bool) {
+func (hs *Positions) Get(symbol string) (Position, bool) {
 	h, ok := hs.data[symbol]
 	return h, ok
 }
 
-func (hs *Holdings) Set(symbol string, h Holding) {
+func (hs *Positions) Set(symbol string, h Position) {
 	hs.data[symbol] = h
 }
 
 // Symbols returns a sorted slice of all tracked symbols.
-func (hs *Holdings) Symbols() []string {
+func (hs *Positions) Symbols() []string {
 	syms := make([]string, 0, len(hs.data))
 	for s := range hs.data {
 		syms = append(syms, s)
@@ -51,7 +51,7 @@ func (hs *Holdings) Symbols() []string {
 
 // Buy increases the quantity for symbol by amount and deducts cost + commission from Cash.
 // Caller must hold the lock.
-func (hs *Holdings) Buy(symbol string, principal float32) {
+func (hs *Positions) Buy(symbol string, principal float32) {
 	h := hs.data[symbol]
 	hs.Cash -= principal
 	h.quantity += h.price / principal
@@ -60,7 +60,7 @@ func (hs *Holdings) Buy(symbol string, principal float32) {
 
 // Sell decreases the quantity for symbol by amount and adds proceeds minus commission to Cash.
 // Caller must hold the lock.
-func (hs *Holdings) Sell(symbol string, principal float32) {
+func (hs *Positions) Sell(symbol string, principal float32) {
 	h := hs.data[symbol]
 	hs.Cash += principal
 	h.quantity -= h.price / principal
@@ -68,7 +68,7 @@ func (hs *Holdings) Sell(symbol string, principal float32) {
 }
 
 // PortfolioValue returns total value of cash plus all held positions at current prices.
-func (hs *Holdings) PortfolioValue() float32 {
+func (hs *Positions) PortfolioValue() float32 {
 	total := hs.Cash
 	for _, h := range hs.data {
 		total += float32(h.quantity) * h.price
