@@ -20,6 +20,7 @@ var candleInterval = 500
 var candleIntervalMs = time.Duration(candleInterval) * time.Millisecond
 var symbols []string
 var holdings *Holdings
+var initialPortfolioValue float32
 
 type wsMessage struct {
 	Type string    `json:"type"`
@@ -77,6 +78,7 @@ func main() {
 	}, 100000)
 	symbols = holdings.Symbols()
 	fetchInitialPrices(token)
+	initialPortfolioValue = portfolioValue()
 	initScreen()
 
 	w, _, err := websocket.DefaultDialer.Dial("wss://ws.finnhub.io?token="+token, nil)
@@ -194,7 +196,7 @@ func renderDashboard() {
 			}
 		}
 
-		qtyText := fmt.Sprintf("%-8d", h.quantity)
+		qtyText := fmt.Sprintf("%-12.2f", h.quantity)
 		line := fmt.Sprintf(
 			"%-7s  %s  %s  %s  %s",
 			symbol,
@@ -207,8 +209,10 @@ func renderDashboard() {
 		fmt.Printf("\033[2K%s\n", line)
 	}
 
+	current := portfolioValue()
+	profit := current - initialPortfolioValue
 	fmt.Printf("\033[2KCash:      $%12.2f\n", holdings.Cash)
-	fmt.Printf("\033[2KPortfolio: $%12.2f\n", portfolioValue())
+	fmt.Printf("\033[2KPortfolio: $%12.2f  Profit: %+.2f\n", current, profit)
 }
 
 func candle() {
@@ -227,10 +231,10 @@ func candle() {
 		avgDelta, errD := getAverageCandleDelta(symbol)
 		if errV == nil && errD == nil {
 			if delta > avgDelta && float32(currentCandleVolume) > avgVol {
-				holdings.Buy(symbol, 1)
+				holdings.Buy(symbol, holdings.Cash*0.01)
 				h, _ = holdings.Get(symbol)
 			} else if delta < avgDelta && float32(currentCandleVolume) > avgVol {
-				holdings.Sell(symbol, 1)
+				holdings.Sell(symbol, holdings.Cash*0.01)
 				h, _ = holdings.Get(symbol)
 			}
 		}

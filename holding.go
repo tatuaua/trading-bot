@@ -12,7 +12,7 @@ type Holding struct {
 	lastVolume       int
 	lastCandleVolume int
 	hasLastCandle    bool
-	quantity         int
+	quantity         float32
 }
 
 // Holdings encapsulates the holdings map, its mutex, and the cash balance.
@@ -51,19 +51,19 @@ func (hs *Holdings) Symbols() []string {
 
 // Buy increases the quantity for symbol by amount and deducts cost + commission from Cash.
 // Caller must hold the lock.
-func (hs *Holdings) Buy(symbol string, amount int) {
+func (hs *Holdings) Buy(symbol string, principal float32) {
 	h := hs.data[symbol]
-	hs.Cash -= float32(amount)*h.price + 1
-	h.quantity += amount
+	hs.Cash -= principal
+	h.quantity += h.price / principal
 	hs.data[symbol] = h
 }
 
 // Sell decreases the quantity for symbol by amount and adds proceeds minus commission to Cash.
 // Caller must hold the lock.
-func (hs *Holdings) Sell(symbol string, amount int) {
+func (hs *Holdings) Sell(symbol string, principal float32) {
 	h := hs.data[symbol]
-	hs.Cash += float32(amount)*h.price - 1
-	h.quantity -= amount
+	hs.Cash += principal
+	h.quantity -= h.price / principal
 	hs.data[symbol] = h
 }
 
