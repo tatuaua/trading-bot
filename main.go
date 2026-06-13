@@ -18,6 +18,7 @@ import (
 
 var candleInterval = 500
 var candleIntervalMs = time.Duration(candleInterval) * time.Millisecond
+var candleRollingWindow = 20
 var symbols []string
 var positions *Positions
 var initialPortfolioValue float32
@@ -62,6 +63,22 @@ func main() {
 	_, err = db.Exec(createTableSQL)
 	if err != nil {
 		log.Fatal("Error creating table:", err)
+	}
+
+	createTradesTableSQL := `CREATE TABLE IF NOT EXISTS trades (
+		symbol TEXT NOT NULL,
+		side TEXT NOT NULL,
+		timestamp BIGINT NOT NULL,
+		price REAL NOT NULL,
+		quantity REAL NOT NULL,
+		principal REAL NOT NULL,
+		reason TEXT NOT NULL,
+		cash_after REAL NOT NULL,
+		portfolio_value_after REAL NOT NULL
+	);`
+	_, err = db.Exec(createTradesTableSQL)
+	if err != nil {
+		log.Fatal("Error creating trades table:", err)
 	}
 
 	positions = NewPositions(map[string]Position{
@@ -228,15 +245,27 @@ func candle() {
 		currentCandleVolume := h.volume - h.lastVolume
 		delta := h.price - h.lastPrice
 
-		avgVol, errV := getAverageCandleVolume(symbol)
-		avgDelta, errD := getAverageCandleDelta(symbol)
+		avgVol, errV := getAverageCandleVolume(symbol, candleRollingWindow)
+		avgDelta, errD := getAverageCandleDelta(symbol, candleRollingWindow)
 		if errV == nil && errD == nil {
+			orderPrincipal := portfolioValue() * 0.01
+			reason := fmt.Sprintf(
+				"delta=%+.4f avg_delta=%+.4f volume=%d avg_volume=%.2f",
+				delta,
+				avgDelta,
+				currentCandleVolume,
+				avgVol,
+			)
 			if delta > avgDelta && float32(currentCandleVolume) > avgVol {
-				positions.TryBuy(symbol, positions.Cash*0.01)
-				h, _ = positions.Get(symbol)
+				if trade, ok := positions.TryBuy(symbol, orderPrincipal); ok {
+					insertTrade(trade, time.Now().Unix(), reason, positions.Cash, portfolioValue())
+					h, _ = positions.Get(symbol)
+				}
 			} else if delta < avgDelta && float32(currentCandleVolume) > avgVol {
-				positions.TrySell(symbol, positions.Cash*0.01)
-				h, _ = positions.Get(symbol)
+				if trade, ok := positions.TrySell(symbol, orderPrincipal); ok {
+					insertTrade(trade, time.Now().Unix(), reason, positions.Cash, portfolioValue())
+					h, _ = positions.Get(symbol)
+				}
 			}
 		}
 
@@ -258,8 +287,37 @@ func insertCandle(symbol string, timestamp int64, volume int, price float32, int
 	}
 }
 
-func getAverageCandleVolume(symbol string) (float32, error) {
-	rows, err := db.Query("SELECT volume FROM candles WHERE symbol = ?", symbol)
+func insertTrade(trade Trade, timestamp int64, reason string, cashAfter float32, portfolioValueAfter float32) {
+	insertSQL := `INSERT INTO trades (
+		symbol,
+		side,
+		timestamp,
+		price,
+		quantity,
+		principal,
+		reason,
+		cash_after,
+		portfolio_value_after
+	) VALUES (?,?,?,?,?,?,?,?,?);`
+	_, err := db.Exec(
+		insertSQL,
+		trade.Symbol,
+		trade.Side,
+		timestamp,
+		trade.Price,
+		trade.Quantity,
+		trade.Principal,
+		reason,
+		cashAfter,
+		portfolioValueAfter,
+	)
+	if err != nil {
+		log.Fatal("Error inserting trade:", err)
+	}
+}
+
+func getAverageCandleVolume(symbol string, window int) (float32, error) {
+	rows, err := db.Query("SELECT volume FROM candles WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?", symbol, window)
 	if err != nil {
 		log.Fatal("Error querying volume:", err)
 	}
@@ -290,8 +348,8 @@ func getAverageCandleVolume(symbol string) (float32, error) {
 	return float32(sum) / float32(amount), nil
 }
 
-func getAverageCandleDelta(symbol string) (float32, error) {
-	rows, err := db.Query("SELECT delta FROM candles WHERE symbol = ?", symbol)
+func getAverageCandleDelta(symbol string, window int) (float32, error) {
+	rows, err := db.Query("SELECT delta FROM candles WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?", symbol, window)
 	if err != nil {
 		log.Fatal("Error querying delta:", err)
 	}
