@@ -75,6 +75,7 @@ func main() {
 		"AVGO":  {quantity: 100},
 		"BRK.B": {quantity: 100},
 		"JPM":   {quantity: 100},
+		"SPCX":  {quantity: 100},
 	}, 100000)
 	symbols = positions.Symbols()
 	fetchInitialPrices(token)
@@ -231,10 +232,10 @@ func candle() {
 		avgDelta, errD := getAverageCandleDelta(symbol)
 		if errV == nil && errD == nil {
 			if delta > avgDelta && float32(currentCandleVolume) > avgVol {
-				positions.Buy(symbol, positions.Cash*0.01)
+				positions.TryBuy(symbol, positions.Cash*0.01)
 				h, _ = positions.Get(symbol)
 			} else if delta < avgDelta && float32(currentCandleVolume) > avgVol {
-				positions.Sell(symbol, positions.Cash*0.01)
+				positions.TrySell(symbol, positions.Cash*0.01)
 				h, _ = positions.Get(symbol)
 			}
 		}

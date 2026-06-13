@@ -49,19 +49,25 @@ func (hs *Positions) Symbols() []string {
 	return syms
 }
 
-// Buy increases the quantity for symbol by amount and deducts cost + commission from Cash.
+// TryBuy increases the quantity for symbol by amount and deducts cost + commission from Cash.
 // Caller must hold the lock.
-func (hs *Positions) Buy(symbol string, principal float32) {
+func (hs *Positions) TryBuy(symbol string, principal float32) {
+	if hs.Cash < principal {
+		return
+	}
 	h := hs.data[symbol]
 	hs.Cash -= principal
 	h.quantity += h.price / principal
 	hs.data[symbol] = h
 }
 
-// Sell decreases the quantity for symbol by amount and adds proceeds minus commission to Cash.
+// TrySell decreases the quantity for symbol by amount and adds proceeds minus commission to Cash.
 // Caller must hold the lock.
-func (hs *Positions) Sell(symbol string, principal float32) {
+func (hs *Positions) TrySell(symbol string, principal float32) {
 	h := hs.data[symbol]
+	if h.quantity <= 0 {
+		return
+	}
 	hs.Cash += principal
 	h.quantity -= h.price / principal
 	hs.data[symbol] = h
